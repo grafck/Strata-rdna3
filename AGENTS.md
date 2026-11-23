@@ -83,3 +83,24 @@ follow it whether a person or an agent writes the text. The short version:
   [docs/COMMUNITY_BENCHMARKS.md](docs/COMMUNITY_BENCHMARKS.md), compare against a same-day run of the build you are
   testing, and say what you did not test.
 - Open test requests and the hardware that is wanted are listed in [docs/TEST_REQUESTS.md](docs/TEST_REQUESTS.md).
+
+## RDNA3 Dedicated NVMe KV-Cache & Session Swapping (`/var/kvcache/strata-rdna3`)
+
+On a single-GPU workstation with an RX 7900 XTX (24 GB VRAM) and 62.7 GB physical RAM running Qwen3.8-Flash-Next:
+- **Zero-RAM Penalty Architecture**: The GPU holds ~17.6 GiB of experts; the remaining ~35–47 GiB of unheld experts must reside in host RAM. Allocating static in-RAM conversation caches (16–32 GiB) evicts expert weight pages to swap/disk, causing expert misses during decode to incur ~2 ms disk latency and collapsing decode speed from 100+ tok/s down to 15–25 tok/s.
+- **NVMe Offload**: Configured `"slot_save_path": "/var/kvcache/strata-rdna3"` on dedicated partition `/dev/nvme0n1p4`.
+- **Direct Engine Slot API**:
+  - `POST /slots/0?action=save`: Dumps active slot state (~227 MiB) in **268–275 ms**.
+  - `POST /slots/0?action=restore`: Restores saved slot in **144–146 ms** with **100% KV cache hit**.
+- **Automated FastAPI Session Proxy (`proxy.py`)**:
+  - Located at `Strata-rdna3/proxy.py`, executed via `run-proxy.sh` or systemd `inference.strata-proxy.service` on port `8000` (backends to `:8080`).
+  - Transparently tracks session IDs (`X-Session-ID`, request body `session_id`, or client IP), auto-saving the active slot to `/var/kvcache/strata-rdna3/<session>.bin` before switching and restoring the target session.
+  - Passes through Server-Sent Events (SSE) streaming without host RAM accumulation.
+- **Pareto Runtime Parameters** (`rdna3/configs/iq3-1gpu.json` & `strata-iq3_s.json`):
+  - `STRATA_PREFILL_CPU_SHARE: "0"`: Bypasses DDR4 bus bottleneck, boosting prefill by **+210% (3.1x)** to **4,413.5 tok/s** at 98k context.
+  - `STRATA_RDNA_MMVQ_WAVE: "3"`: Optimal decode wavefront geometry (**100.9–113.5 tok/s**).
+  - `--pool-workers 11`: Eliminates core-0 thread contention with the host thread on 12-core CPUs.
+  - `--max-context 262144`: Full architectural model context enabled.
+  - `--vram-reserve-mib 896`: Prevents GPU driver from paging VRAM to system memory under deep context.
+  - `STRATA_TOPK_SPLIT_MIN 98304`: Multi-CTA parallel QSA top-k selection armed past 96k tokens.
+
