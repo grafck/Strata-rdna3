@@ -61,7 +61,7 @@
   "32"
  ],
  "env": {
-  "STRATA_HIPBLASLT_TUNING": "@STRATA@/tools/hip/gfx1100-hipblaslt-100200.txt",
+  "STRATA_HIPBLASLT_TUNING": "@STRATA@/tools/hip/gfx1100-hipblaslt-100401.txt",
   "STRATA_RDNA_MMVQ_WAVE": "3",
   "STRATA_PEER_TRANSPORT": "host",
   "STRATA_HIP_WMMA": "1",
