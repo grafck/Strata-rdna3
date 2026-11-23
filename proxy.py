@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger("strata-proxy")
 
 ROOT = Path(__file__).resolve().parent
-DEFAULT_SESSIONS_DIR = Path("/var/kvcache/subdir")
+DEFAULT_SESSIONS_DIR = Path("/var/kvcache/strata-rdna3")
 
 
 class ProxyState:

@@ -4,7 +4,7 @@
  "tokenizer": "@DATA@/packs/iq3_s/tokenizer",
  "model_name": "qwen-flash-iq3",
  "port": 8080,
- "slot_save_path": "/var/kvcache/subdir",
+ "slot_save_path": "/var/kvcache/strata-rdna3",
  "backend": "hip",
  "gpu": "@GPUS@",
  "layer_split": "auto",
