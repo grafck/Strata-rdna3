@@ -112,10 +112,22 @@ class _Nvml:
 SYSFS = "/sys"
 
 
+def _normalize_amd_uid(value):
+    s = str(value).strip().lower()
+    if s.startswith("gpu-"):
+        s = s[4:]
+    if s.startswith("0x"):
+        s = s[2:]
+    try:
+        return int(s, 16)
+    except ValueError:
+        return None
+
+
 def amd_device_dir(index, sysfs=None):
-    """The amdgpu sysfs folder (/sys/class/drm/renderD<N>/device) of the AMD GPU that HIP numbers `index`: the KFD
-    topology's GPU nodes in order, the CPU nodes skipped, linked to their render node by drm_render_minor - the
-    numbering setup's amd_gpus() and HIP_VISIBLE_DEVICES use.  None when there is no such card (or no amdgpu)."""
+    """The amdgpu sysfs folder (/sys/class/drm/renderD<N>/device) of the AMD GPU that HIP numbers `index` (int KFD
+    ordinal or GPU UID like 'GPU-110069a31ca0e438'): the KFD topology's GPU nodes in order, the CPU nodes skipped,
+    linked to their render node by drm_render_minor. None when there is no such card (or no amdgpu)."""
     base = os.path.join(sysfs or SYSFS, "class", "kfd", "kfd", "topology", "nodes")
     try:
         nodes = sorted((n for n in os.listdir(base) if n.isdigit()), key=int)
@@ -131,9 +143,19 @@ def amd_device_dir(index, sysfs=None):
             gpus.append(props)
         except (OSError, ValueError):
             continue
-    if not 0 <= index < len(gpus) or not gpus[index].get("drm_render_minor"):
+    if isinstance(index, str) and not index.strip().isdigit():
+        want = _normalize_amd_uid(index)
+        if want is None:
+            return None
+        match = next((g for g in gpus if g.get("unique_id") and int(g["unique_id"]) == want), None)
+        if not match or not match.get("drm_render_minor"):
+            return None
+        dev = os.path.join(sysfs or SYSFS, "class", "drm", "renderD" + match["drm_render_minor"].strip(), "device")
+        return dev if os.path.isdir(dev) else None
+    idx = int(index)
+    if not 0 <= idx < len(gpus) or not gpus[idx].get("drm_render_minor"):
         return None
-    dev = os.path.join(sysfs or SYSFS, "class", "drm", "renderD" + gpus[index]["drm_render_minor"].strip(), "device")
+    dev = os.path.join(sysfs or SYSFS, "class", "drm", "renderD" + gpus[idx]["drm_render_minor"].strip(), "device")
     return dev if os.path.isdir(dev) else None
 
 

@@ -33,13 +33,24 @@ def fill(value, subst):
     return value
 
 
+def _parse_gpu_spec(spec: str):
+    out = []
+    for raw in spec.split(","):
+        s = raw.strip()
+        if not s:
+            continue
+        out.append(int(s) if s.isdigit() else s)
+    return out
+
+
 def config(setup, data, gpus=None, vision=True):
     """The filled-in server config of one setup; exits with what is missing."""
     data = Path(data).resolve()
     cfg = json.loads((ROOT / "rdna3" / "configs" / f"{setup}.json").read_text())
     cfg = fill(cfg, {"@STRATA@": str(ROOT), "@DATA@": str(data)})
     count = int(setup.split("-")[1][0])
-    cfg["gpu"] = [int(x) for x in gpus.split(",")] if gpus else list(range(count))
+    env_gpus = os.environ.get("ROCR_VISIBLE_DEVICES") or os.environ.get("HIP_VISIBLE_DEVICES")
+    cfg["gpu"] = _parse_gpu_spec(gpus) if gpus else (_parse_gpu_spec(env_gpus) if env_gpus else list(range(count)))
     if len(cfg["gpu"]) != count:
         sys.exit(f"{setup} needs {count} GPU(s); --gpus gave {cfg['gpu']}")
     build = ROOT / "engine" / "BUILD.json"
@@ -70,7 +81,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("setup", choices=SETUPS)
     ap.add_argument("--data", required=True, help="setup.py's data folder (models/, packs/, mtp/)")
-    ap.add_argument("--gpus", help="HIP device numbers, first = layers 0-23 (default 0 or 0,1; the README used 1 and 1,0)")
+    ap.add_argument("--gpus", help="HIP device UID(s) (e.g. GPU-110069a31ca0e438) or numbers, first = layers 0-23")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--no-vision", action="store_true", help="no image encoder (saves its RAM and start time)")

@@ -921,10 +921,20 @@ def visible_device_order(env: dict | None, backend: str | None) -> list[int]:
         return []
     name = "HIP_VISIBLE_DEVICES" if backend == "hip" else "CUDA_VISIBLE_DEVICES"
     value = (env or {}).get(name)
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,5}(?:,[0-9]{1,5}){0,15}", value):
+    if backend == "hip" and (not value or _is_gpu_uid(value.split(",")[0])):
+        value = (env or {}).get("ROCR_VISIBLE_DEVICES") or value
+    if not isinstance(value, str) or not value.strip():
         return []
-    devices = [int(part) for part in value.split(",")]
-    return devices if all(0 <= device <= 65535 for device in devices) and len(set(devices)) == len(devices) else []
+    if re.fullmatch(r"[0-9]{1,5}(?:,[0-9]{1,5}){0,15}", value):
+        devices = [int(part) for part in value.split(",")]
+        return devices if all(0 <= device <= 65535 for device in devices) and len(set(devices)) == len(devices) else []
+    if backend == "hip":
+        parts = [p.strip() for p in value.split(",") if p.strip()]
+        if parts and all(_is_gpu_uid(p) for p in parts):
+            resolved = [_kfd_uid_to_index(p) for p in parts]
+            if all(r is not None for r in resolved) and len(set(resolved)) == len(resolved):
+                return [int(r) for r in resolved]
+    return []
 
 
 def configure_batch_telemetry_env(env: dict, cfg: dict, override: bool | None) -> None:
@@ -2974,11 +2984,63 @@ def gpu_list(cfg: dict) -> list[int]:
     return _gpu_numbers(cfg.get("gpu"))
 
 
+def _is_gpu_uid(x) -> bool:
+    return isinstance(x, str) and x.strip().upper().startswith("GPU-")
+
+
+def _gpu_uids(g) -> list[str]:
+    if g is None or g == "":
+        return []
+    items = g if isinstance(g, (list, tuple)) else str(g).split(",")
+    return [str(x).strip() for x in items if _is_gpu_uid(str(x).strip())]
+
+
+def _kfd_uid_to_index(uid: str, root: str = "/sys/class/kfd/kfd/topology/nodes") -> int | None:
+    """Resolve an AMD GPU UID ('GPU-110069a31ca0e438') to its current KFD GPU ordinal."""
+    s = uid.strip().lower()
+    if s.startswith("gpu-"):
+        s = s[4:]
+    if s.startswith("0x"):
+        s = s[2:]
+    try:
+        want = int(s, 16)
+    except ValueError:
+        return None
+    try:
+        nodes = sorted((int(n) for n in os.listdir(root) if n.isdigit()))
+    except OSError:
+        return None
+    idx = 0
+    for n in nodes:
+        try:
+            with open(os.path.join(root, str(n), "properties"), encoding="utf-8") as f:
+                props = dict(line.split() for line in f if len(line.split()) == 2)
+            if int(props.get("gfx_target_version", 0)) == 0 or int(props.get("simd_count", 0)) == 0:
+                continue
+            if props.get("unique_id") and int(props["unique_id"]) == want:
+                return idx
+            idx += 1
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def _gpu_numbers(g) -> list[int]:
     if g is None or g == "":
         return []
     items = g if isinstance(g, (list, tuple)) else str(g).split(",")
-    return [int(str(x).strip()) for x in items if str(x).strip() != ""]
+    out: list[int] = []
+    for x in items:
+        s = str(x).strip()
+        if not s:
+            continue
+        if _is_gpu_uid(s):
+            resolved = _kfd_uid_to_index(s)
+            if resolved is not None:
+                out.append(resolved)
+        else:
+            out.append(int(s))
+    return out
 
 
 def gpu_roles_active(cfg: dict) -> bool:
@@ -3557,8 +3619,15 @@ def child_env(cfg: dict, *, offline: bool = False) -> dict:
     if gpu_all_off(cfg):                             # every card Off: the engine sees none (a CPU engine runs; the others say so at start)
         env["CUDA_VISIBLE_DEVICES"] = ""
         env["HIP_VISIBLE_DEVICES"] = ""
+    elif cfg.get("backend") == "hip" and _gpu_uids(cfg.get("gpu")):   # AMD: explicit GPU UID pin (e.g. GPU-110069a31ca0e438)
+        uid_str = ",".join(_gpu_uids(cfg.get("gpu")))
+        env["ROCR_VISIBLE_DEVICES"] = uid_str
+        env["HIP_VISIBLE_DEVICES"] = uid_str
+        env["CUDA_VISIBLE_DEVICES"] = uid_str
+        env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     elif hip_visible(cfg) and cfg.get("backend") == "hip":   # AMD: numbered as HIP numbers them (hip_visible)
-        env["HIP_VISIBLE_DEVICES"] = ",".join(str(i) for i in hip_visible(cfg))
+        if not (env.get("ROCR_VISIBLE_DEVICES") or str(env.get("HIP_VISIBLE_DEVICES", "")).startswith("GPU-")):
+            env["HIP_VISIBLE_DEVICES"] = ",".join(str(i) for i in hip_visible(cfg))
     elif gpu_list(cfg):                              # issue #51: the GPU(s) to run on, numbered as nvidia-smi does; CUDA's
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"      # own default order (fastest first) can number the cards otherwise
         env["CUDA_VISIBLE_DEVICES"] = ",".join(str(i) for i in ordered_gpus(cfg))

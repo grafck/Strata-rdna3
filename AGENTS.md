@@ -86,7 +86,11 @@ follow it whether a person or an agent writes the text. The short version:
 
 ## RDNA3 Dedicated NVMe KV-Cache & Session Swapping (`/var/kvcache/strata-rdna3`)
 
-On a single-GPU workstation with an RX 7900 XTX (24 GB VRAM) and 62.7 GB physical RAM running Qwen3.8-Flash-Next:
+On this workstation (AMD Radeon RX Vega `gfx900`, `GPU-0213fb15841210e4`, 8 GiB — **not used for inference**; AMD Radeon RX 7900 XTX `gfx1100`, `GPU-110069a31ca0e438`, 24 GiB, plus 62.7 GB physical RAM) running Qwen3.8-Flash-Next:
+- **GPU UID Pinning (`inference.strata.service` + `inference.strata.service.d/override.conf`)**:
+  - Always address the inference GPU by UID (`GPU-110069a31ca0e438`), never by ordinal `0` or `1`.
+  - Systemd pins `ROCR_VISIBLE_DEVICES=GPU-110069a31ca0e438`, `HIP_VISIBLE_DEVICES=GPU-110069a31ca0e438`, `CUDA_VISIBLE_DEVICES=GPU-110069a31ca0e438`, and `CUDA_DEVICE_ORDER=PCI_BUS_ID` so the Vega (`GPU-0213fb15841210e4`) is never exposed to ROCm/HIP.
+  - `ExecStart` runs `.venv/bin/python rdna3/run.py iq3-1gpu --data /home/graf2/Strata-data --gpus GPU-110069a31ca0e438 --port 8080`. `rdna3/run.py`, `serve/server.py`, and `serve/telemetry.py` resolve GPU UIDs dynamically via KFD `unique_id` and propagate UID pinning to `ROCR_VISIBLE_DEVICES`/`HIP_VISIBLE_DEVICES`/`CUDA_VISIBLE_DEVICES`.
 - **Zero-RAM Penalty Architecture**: The GPU holds ~17.6 GiB of experts; the remaining ~35–47 GiB of unheld experts must reside in host RAM. Allocating static in-RAM conversation caches (16–32 GiB) evicts expert weight pages to swap/disk, causing expert misses during decode to incur ~2 ms disk latency and collapsing decode speed from 100+ tok/s down to 15–25 tok/s.
 - **NVMe Offload**: Configured `"slot_save_path": "/var/kvcache/strata-rdna3"` on dedicated partition `/dev/nvme0n1p4`.
 - **Direct Engine Slot API**:
